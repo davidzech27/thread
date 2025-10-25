@@ -130,7 +130,12 @@ export const MasterNode = memo(({ data }: { data: MasterNodeData }) => {
 				},
 				"→"
 			)
-		)
+		),
+		React.createElement(Handle, {
+			type: "source",
+			position: Position.Bottom,
+			style: { opacity: 0, pointerEvents: "none" }
+		})
 	);
 });
 
