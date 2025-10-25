@@ -580,32 +580,3 @@ async function* runMainAgent(state: AgentState): AsyncGenerator<any, void, undef
 // ============================================================================
 
 export { agent };
-
-// ============================================================================
-// DEMO
-// ============================================================================
-
-async function main() {
-  // Set up a simple user query handler for demo
-  setQueryUserHandler(async (agentId, prompt) => {
-    console.log(`\n[USER QUERY for ${agentId}]: ${prompt}`);
-    // In real implementation, this would wait for user input
-    return "Yes, proceed"; // Auto-respond for demo
-  });
-
-  const stream = agent({
-    prompt: "Use fork and wait to explore different possibilities and devise a plan for my birthday from 10am to midnight",
-  });
-
-  for await (const chunk of stream) {
-    if (chunk.type !== "agent-state") {
-      console.log(JSON.stringify(chunk, null, 2));
-    }
-  }
-
-  console.log("\n\nFinal Agent Tree:", JSON.stringify(getAgentTree(), null, 2));
-}
-
-if (require.main === module) {
-  main().catch(console.error);
-}
