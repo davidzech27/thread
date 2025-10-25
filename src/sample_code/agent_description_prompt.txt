@@ -1,0 +1,26 @@
+build me a skeleton proof-of-concept async ai browser recursive agent under the following rule:
+agent(
+Has variable: agent_id, user_comment, user_content
+1. decide, according to the context, whether this question would require user clarification
+- if so use query_user to ask: if response: return, else continue
+2. decide whether a synced question needs to be asked before the agent can proceed
+- if so, ask it and loop back to step 2
+- else continue
+3. generate a list of async subquestions to ask
+4. Asynchronously create an agent for each async subquestion and query ai for the current question
+5. Examine user_comment:
+If it is unchanged: continue
+If it is delete:
+Query ai to find out why would the user delete this agent, return the deleted status and the finding
+If it is modify:
+Return the modified content
+6. Summary:
+Query AI with the response to the question as well as each async agent’s response. Find out the following:
+Does the user’s opinion create new uncertainty to the answer to the question? If so summarize existing finding, add that to context, and loop to step 2
+Else: summarize all the answers, return
+)
+Also need:
+
+Tree of all agent nodes currently running (live updated)
+User_intervention function that takes in agent id and values, then override said agent
+Note: this is for a demo. For each function, block comment its true purpose, you can skip unknown/complicated implementations
