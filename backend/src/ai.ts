@@ -1,4 +1,5 @@
-import { CoreMessage, streamText, tool } from "ai";
+import { streamText, tool } from "ai";
+import type { CoreMessage } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import python from "./python";
@@ -142,13 +143,14 @@ async function decideSyncedQuestion(content: string, messages: CoreMessage[]): P
       {
         role: "user",
         content: `Before proceeding with: "${content}"
-
+Only do this when the question is blocking and very necessary in order to proceed and solve the entire problem.
 Do you need to ask the user a BLOCKING question that must be answered before you can continue? 
+If the user's response won't change your answer significantly, don't ask.
+Your response must be exact as it's parsed by a program.
 If yes, respond with ONLY the question text.
 If no, respond with: NO_QUESTION`,
       },
     ],
-    maxSteps: 1,
   });
 
   let response = "";
@@ -169,12 +171,13 @@ async function generateAsyncSubquestions(content: string, messages: CoreMessage[
         role: "user",
         content: `For the request: "${content}"
 
-Generate 0-4 independent subquestions that could be explored in parallel to help answer this request.
+Generate 0-4 independent subquestions that could be explored in parallel to help answer this request if it requires so
+Do not generate any subquestion if there is a clear answer to the question and no further exploration is needed
 Each subquestion should be on its own line.
-If no subquestions needed, respond with: NONE`,
+If no subquestions needed, respond with: NONE
+Your answer must be exact, as it's parsed by a program`,
       },
     ],
-    maxSteps: 1,
   });
 
   let response = "";
@@ -213,11 +216,10 @@ ${subResultsText}
 
 Provide a comprehensive summary. At the end, add a line:
 NEEDS_MORE_INFO: yes/no
-
-Indicate 'yes' if there are contradictions, uncertainties, or gaps that require user input.`,
+Must be exact, it will be parsed by a program.
+Indicate 'yes' if there are contradictions, critical uncertainties, or gaps that require many user input.`,
       },
     ],
-    maxSteps: 1,
   });
 
   let response = "";
@@ -243,7 +245,11 @@ async function* agent(input: {
   const agentId = input.agentId || randomUUID();
   const parentId = input.parentId || null;
   const initialMessages: CoreMessage[] = input.messages || [];
-  
+  // Log agent id and initial message for debugging
+  const firstMessage = initialMessages.length > 0 ? initialMessages[0] : null;
+  const initialMessage =
+    input.prompt ?? (firstMessage && typeof firstMessage.content === 'string' ? firstMessage.content : "(no initial message)");
+  console.log("[agent] agentId=", agentId, "initialMessage=", initialMessage);
   const state: AgentState = {
     agentId,
     parentId,
@@ -318,13 +324,14 @@ async function* agent(input: {
     // STEP 3: Generate async subquestions
     const subquestions = await generateAsyncSubquestions(state.userContent, state.messages);
 
-    // STEP 4: Spawn subagents and run main agent
-    const subagentPromises: Promise<{ agentId: string; result: string | null; status: AgentStatus }>[] = [];
+    // STEP 4: Spawn subagents
     const subagentGenerators: AsyncGenerator<any, string, undefined>[] = [];
+    const subagentIds: string[] = [];
     
     for (const subq of subquestions) {
       const subagentId = randomUUID();
       state.subagents.push(subagentId);
+      subagentIds.push(subagentId);
       
       const stream = agent({
         prompt: subq,
@@ -333,43 +340,12 @@ async function* agent(input: {
       });
 
       subagentGenerators.push(stream);
-
-      // Create promise to collect final result
-      const subagentPromise = (async () => {
-        let result = "";
-        
-        for await (const chunk of stream) {
-          if (chunk.type === "text-delta") {
-            result += chunk.textDelta;
-          }
-        }
-
-        const subState = AGENT_TREE.get(subagentId);
-        return {
-          agentId: subagentId,
-          result: subState?.result || result,
-          status: subState?.status || "completed",
-        };
-      })();
-
-      subagentPromises.push(subagentPromise);
     }
-
-    // Forward subagent chunks as they come in
-    const forwardSubagentChunks = async () => {
-      for (const subgen of subagentGenerators) {
-        (async () => {
-          for await (const chunk of subgen) {
-            // Note: can't yield here, will be handled by interleaving below
-          }
-        })();
-      }
-    };
-    forwardSubagentChunks();
 
     // Run main agent with Python tool
     const mainAgentGenerator = runMainAgent(state);
     
+    // Interleave main agent and subagent chunks
     for await (const chunk of mainAgentGenerator) {
       // STEP 5: Check for user intervention
       if (state.userComment === "delete") {
@@ -388,9 +364,23 @@ async function* agent(input: {
 
       yield chunk;
     }
+    
+    // Now process subagent streams and forward their chunks
+    for (const subgen of subagentGenerators) {
+      for await (const chunk of subgen) {
+        yield chunk;
+      }
+    }
 
     // STEP 6: Collect and summarize results
-    const subResults = await Promise.all(subagentPromises);
+    const subResults = subagentIds.map(id => {
+      const subState = AGENT_TREE.get(id);
+      return {
+        agentId: id,
+        result: subState?.result || null,
+        status: subState?.status || "completed" as AgentStatus,
+      };
+    });
     
     const mainAnswer = state.result || "";
     const { summary, needsMoreInfo } = await summarizeWithAI(mainAnswer, subResults);
@@ -548,7 +538,6 @@ async function* runMainAgent(state: AgentState): AsyncGenerator<any, void, undef
         },
       }),
     },
-    maxSteps: 100,
     onFinish: () => {
       if (py) {
         py.close();
@@ -560,12 +549,12 @@ async function* runMainAgent(state: AgentState): AsyncGenerator<any, void, undef
 
   let textResult = "";
   for await (const chunk of stream) {
-    if (chunk.type === "message") {
-      state.messages.push(...chunk.messages);
-    }
     if (chunk.type === "text-delta") {
-      textResult += chunk.textDelta;
+      textResult += chunk.delta;
     }
+    
+    // Attach agentId to all chunks for routing
+    (chunk as any).agentId = state.agentId;
 
     yield chunk;
   }
