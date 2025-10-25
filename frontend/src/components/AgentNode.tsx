@@ -15,6 +15,7 @@ interface AgentNodeData {
 	onContextSubmit?: (context: string) => void;
 	onDelete?: () => void;
 	onUserResponse?: (response: string) => void;
+	onViewClick?: () => void;
 }
 
 const statusColors = {
@@ -89,6 +90,13 @@ export const AgentNode = memo(({ data }: { data: AgentNodeData }) => {
 		e.stopPropagation();
 		submitContext();
 		setContext(""); // Clear immediately
+	};
+
+	const handleViewClick = (e: React.MouseEvent) => {
+		e.stopPropagation();
+		if (data.onViewClick) {
+			data.onViewClick();
+		}
 	};
 
 	const handleDelete = (e: React.MouseEvent) => {
@@ -207,6 +215,23 @@ export const AgentNode = memo(({ data }: { data: AgentNodeData }) => {
 						},
 					},
 					"✓"
+				),
+				React.createElement(
+					"button",
+					{
+						onClick: handleViewClick,
+						style: {
+							padding: "6px 10px",
+							background: "#3b82f6",
+							color: "white",
+							border: "none",
+							borderRadius: "6px",
+							cursor: "pointer",
+							fontSize: "14px",
+							fontWeight: 500,
+						},
+					},
+					"👁️"
 				),
 				React.createElement(
 					"button",

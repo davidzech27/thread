@@ -4,16 +4,34 @@ import {
 	createMemo,
 	onMount,
 	onCleanup,
+	createEffect,
 } from "solid-js";
 import { ReactFlowWrapper } from "./components/ReactFlowWrapper";
+import { BrowserModal } from "./components/BrowserModal";
 import { Node as FlowNode, Edge, MarkerType } from "@xyflow/react";
 import { Node } from "./types/Node";
+import React from "react";
+import { createRoot } from "react-dom/client";
 
 const App: Component = () => {
 	const [nodes, setNodes] = createSignal<Node[]>([]);
 	const [masterPrompt, setMasterPrompt] = createSignal<string>("");
 	const [ws, setWs] = createSignal<WebSocket | null>(null);
 	const [isConnected, setIsConnected] = createSignal(false);
+	const [modalOpen, setModalOpen] = createSignal(false);
+	const [modalTitle, setModalTitle] = createSignal("");
+
+	const handleViewClick = (nodeId: string, title: string) => {
+		console.log("View clicked for node:", nodeId, title);
+		setModalTitle(title);
+		setModalOpen(true);
+		console.log("Modal state:", modalOpen());
+	};
+
+	const handleCloseModal = () => {
+		console.log("Closing modal");
+		setModalOpen(false);
+	};
 
 	// WebSocket connection
 	onMount(() => {
@@ -408,6 +426,7 @@ const App: Component = () => {
 						onDelete: () => deleteNode(node.id),
 						onUserResponse: (response: string) =>
 							handleUserResponse(node.id, response),
+						onViewClick: () => handleViewClick(node.id, node.title),
 					},
 				});
 
@@ -566,6 +585,37 @@ const App: Component = () => {
 		toggleNode(flowNode.id);
 	};
 
+	// Create a ref for the modal container
+	let modalContainer: HTMLDivElement | undefined;
+	let modalRootInstance: any = null;
+
+	onMount(() => {
+		if (modalContainer) {
+			console.log("Setting up modal root");
+			modalRootInstance = createRoot(modalContainer);
+		}
+	});
+
+	// Re-render modal when state changes
+	createEffect(() => {
+		if (modalRootInstance) {
+			console.log("Rendering modal with isOpen:", modalOpen());
+			modalRootInstance.render(
+				React.createElement(BrowserModal, {
+					isOpen: modalOpen(),
+					onClose: handleCloseModal,
+					title: modalTitle(),
+				})
+			);
+		}
+	});
+
+	onCleanup(() => {
+		if (modalRootInstance) {
+			modalRootInstance.unmount();
+		}
+	});
+
 	return (
 		<div class="w-screen h-screen bg-white">
 			<ReactFlowWrapper
@@ -573,6 +623,7 @@ const App: Component = () => {
 				edges={flowData().edges}
 				onNodeClick={handleNodeClick}
 			/>
+			<div ref={modalContainer!} />
 		</div>
 	);
 };
