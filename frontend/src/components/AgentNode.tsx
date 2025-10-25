@@ -11,6 +11,7 @@ interface AgentNodeData {
   onContextChange?: (context: string) => void;
   onContextSubmit?: (context: string) => void;
   onDelete?: () => void;
+  onViewClick?: () => void;
 }
 
 const statusColors = {
@@ -66,6 +67,13 @@ export const AgentNode = memo(({ data }: { data: AgentNodeData }) => {
     }
   };
 
+  const handleViewClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (data.onViewClick) {
+      data.onViewClick();
+    }
+  };
+
   return React.createElement(
     'div',
     {
@@ -85,7 +93,11 @@ export const AgentNode = memo(({ data }: { data: AgentNodeData }) => {
         cursor: 'pointer',
       },
     },
-    !data.isRoot && React.createElement(Handle, { type: 'target', position: Position.Top, style: { background: '#999' } }),
+    React.createElement(Handle, { 
+      type: 'target', 
+      position: Position.Top, 
+      style: { background:'#999' } 
+    }),
     
     // Controls at the top when selected
     data.isSelected && React.createElement(
@@ -139,6 +151,23 @@ export const AgentNode = memo(({ data }: { data: AgentNodeData }) => {
           },
         },
         '✓'
+      ),
+      React.createElement(
+        'button',
+        {
+          onClick: handleViewClick,
+          style: {
+            padding: '6px 10px',
+            background: '#3b82f6',
+            color: 'white',
+            border: 'none',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontSize: '14px',
+            fontWeight: 500,
+          },
+        },
+        '👁️'
       ),
       React.createElement(
         'button',

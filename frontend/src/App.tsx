@@ -1,7 +1,10 @@
-import { Component, createSignal, createMemo, onMount, onCleanup } from 'solid-js';
+import { Component, createSignal, createMemo, onMount, onCleanup, createEffect } from 'solid-js';
 import { ReactFlowWrapper } from './components/ReactFlowWrapper';
+import { BrowserModal } from './components/BrowserModal';
 import { Node as FlowNode, Edge, MarkerType } from '@xyflow/react';
 import { Node } from './types/Node';
+import React from 'react';
+import { createRoot } from 'react-dom/client';
 
 const mockData: Node[] = [
   {
@@ -68,11 +71,25 @@ const mockData: Node[] = [
 const App: Component = () => {
   const [nodes, setNodes] = createSignal<Node[]>(mockData);
   const [masterPrompt, setMasterPrompt] = createSignal<string>('');
+  const [modalOpen, setModalOpen] = createSignal(false);
+  const [modalTitle, setModalTitle] = createSignal('');
 
   const handleMasterSubmit = (prompt: string) => {
     console.log('Master prompt:', prompt);
     setMasterPrompt(prompt);
     // TODO: Send to backend to process and create agent nodes
+  };
+
+  const handleViewClick = (nodeId: string, title: string) => {
+    console.log('View clicked for node:', nodeId, title);
+    setModalTitle(title);
+    setModalOpen(true);
+    console.log('Modal state:', modalOpen());
+  };
+
+  const handleCloseModal = () => {
+    console.log('Closing modal');
+    setModalOpen(false);
   };
 
   // Keyboard event handler for delete
@@ -204,6 +221,7 @@ const App: Component = () => {
             submittedContexts: node.submittedContexts,
             onContextSubmit: (context: string) => updateNodeContext(node.id, context),
             onDelete: () => deleteNode(node.id),
+            onViewClick: () => handleViewClick(node.id, node.title),
           },
         });
         
@@ -236,27 +254,6 @@ const App: Component = () => {
     };
     
     traverseTree(nodes());
-    
-    // Add edges from master node to all root nodes
-    nodes().forEach((node) => {
-      flowEdges.push({
-        id: `master-${node.id}`,
-        source: 'master',
-        target: node.id,
-        type: 'smoothstep',
-        animated: false,
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          width: 20,
-          height: 20,
-          color: '#10b981',
-        },
-        style: {
-          strokeWidth: 2,
-          stroke: '#10b981',
-        },
-      });
-    });
     
     return { nodes: flowNodes, edges: flowEdges };
   });
@@ -298,7 +295,7 @@ const App: Component = () => {
           ...node, 
           isSelected: newIsSelected,
           isExpanded: newIsSelected, // Collapse if deselected, expand if selected
-          children: node.children ? deselectAllChildren(node.children) : undefined
+          children: node.children ? (newIsSelected ? deselectAllChildren(node.children) : collapseAllChildren(node.children)) : undefined
         };
       } else if (node.children) {
         const hasSelectedChild = hasNodeInTree(node.children, targetId);
@@ -358,6 +355,37 @@ const App: Component = () => {
     toggleNode(flowNode.id);
   };
 
+  // Create a ref for the modal container
+  let modalContainer: HTMLDivElement | undefined;
+  let modalRootInstance: any = null;
+
+  onMount(() => {
+    if (modalContainer) {
+      console.log('Setting up modal root');
+      modalRootInstance = createRoot(modalContainer);
+    }
+  });
+
+  // Re-render modal when state changes
+  createEffect(() => {
+    if (modalRootInstance) {
+      console.log('Rendering modal with isOpen:', modalOpen());
+      modalRootInstance.render(
+        React.createElement(BrowserModal, {
+          isOpen: modalOpen(),
+          onClose: handleCloseModal,
+          title: modalTitle(),
+        })
+      );
+    }
+  });
+
+  onCleanup(() => {
+    if (modalRootInstance) {
+      modalRootInstance.unmount();
+    }
+  });
+
   return (
     <div class="w-screen h-screen bg-white">
       <ReactFlowWrapper
@@ -365,6 +393,7 @@ const App: Component = () => {
         edges={flowData().edges}
         onNodeClick={handleNodeClick}
       />
+      <div ref={modalContainer!} />
     </div>
   );
 };
