@@ -1,8 +1,9 @@
 import { onMount, onCleanup, createEffect } from 'solid-js';
-import React from 'react';
-import { ReactFlow, Background, Controls, Node as FlowNode, Edge, MarkerType } from '@xyflow/react';
+import React, { useState, useCallback, useEffect } from 'react';
+import { ReactFlow, Background, Controls, Node as FlowNode, Edge, useNodesState, useEdgesState } from '@xyflow/react';
 import { createRoot } from 'react-dom/client';
 import { AgentNode } from './AgentNode';
+import { MasterNode } from './MasterNode';
 import '@xyflow/react/dist/style.css';
 
 interface ReactFlowWrapperProps {
@@ -13,6 +14,50 @@ interface ReactFlowWrapperProps {
 
 const nodeTypes = {
   agentNode: AgentNode,
+  masterNode: MasterNode,
+};
+
+// Create a React component that properly manages state
+const ReactFlowComponent = ({ 
+  initialNodes, 
+  initialEdges, 
+  onNodeClick 
+}: { 
+  initialNodes: FlowNode[], 
+  initialEdges: Edge[], 
+  onNodeClick?: (event: any, node: FlowNode) => void 
+}) => {
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+
+  // Update nodes and edges when props change
+  useEffect(() => {
+    setNodes(initialNodes);
+  }, [initialNodes, setNodes]);
+
+  useEffect(() => {
+    setEdges(initialEdges);
+  }, [initialEdges, setEdges]);
+
+  return React.createElement(
+    ReactFlow,
+    {
+      nodes,
+      edges,
+      onNodesChange,
+      onEdgesChange,
+      onNodeClick,
+      nodeTypes,
+      fitView: true,
+      attributionPosition: 'bottom-right',
+      nodesDraggable: false,
+      nodesConnectable: false,
+      elementsSelectable: false,
+      zoomOnDoubleClick: false,
+    },
+    React.createElement(Background),
+    React.createElement(Controls)
+  );
 };
 
 export const ReactFlowWrapper = (props: ReactFlowWrapperProps) => {
@@ -36,17 +81,11 @@ export const ReactFlowWrapper = (props: ReactFlowWrapperProps) => {
     if (!root) return;
 
     root.render(
-      React.createElement(ReactFlow, {
-        nodes: props.nodes,
-        edges: props.edges,
+      React.createElement(ReactFlowComponent, {
+        initialNodes: props.nodes,
+        initialEdges: props.edges,
         onNodeClick: props.onNodeClick,
-        nodeTypes: nodeTypes,
-        fitView: true,
-        attributionPosition: 'bottom-right',
-      },
-      React.createElement(Background),
-      React.createElement(Controls)
-      )
+      })
     );
   };
 

@@ -1,4 +1,4 @@
-import { Component, createSignal, createMemo } from 'solid-js';
+import { Component, createSignal, createMemo, onMount, onCleanup } from 'solid-js';
 import { ReactFlowWrapper } from './components/ReactFlowWrapper';
 import { Node as FlowNode, Edge, MarkerType } from '@xyflow/react';
 import { Node } from './types/Node';
@@ -67,11 +67,111 @@ const mockData: Node[] = [
 
 const App: Component = () => {
   const [nodes, setNodes] = createSignal<Node[]>(mockData);
+  const [masterPrompt, setMasterPrompt] = createSignal<string>('');
+
+  const handleMasterSubmit = (prompt: string) => {
+    console.log('Master prompt:', prompt);
+    setMasterPrompt(prompt);
+    // TODO: Send to backend to process and create agent nodes
+  };
+
+  // Keyboard event handler for delete
+  const handleKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Delete') {
+      const selectedNode = getSelectedNode(nodes());
+      if (selectedNode) {
+        event.preventDefault();
+        deleteNode(selectedNode.id);
+      }
+    }
+  };
+
+  onMount(() => {
+    window.addEventListener('keydown', handleKeyDown);
+  });
+
+  onCleanup(() => {
+    window.removeEventListener('keydown', handleKeyDown);
+  });
+
+  // Get the currently selected node
+  const getSelectedNode = (nodesList: Node[]): Node | null => {
+    for (const node of nodesList) {
+      if (node.isSelected) return node;
+      if (node.children) {
+        const selected = getSelectedNode(node.children);
+        if (selected) return selected;
+      }
+    }
+    return null;
+  };
+
+  // Delete a node by ID
+  const deleteNode = (nodeId: string) => {
+    setNodes((prevNodes) => deleteNodeRecursive(prevNodes, nodeId));
+  };
+
+  const deleteNodeRecursive = (nodesList: Node[], targetId: string): Node[] => {
+    return nodesList
+      .filter((node) => node.id !== targetId)
+      .map((node) => ({
+        ...node,
+        children: node.children ? deleteNodeRecursive(node.children, targetId) : undefined,
+      }));
+  };
+
+  // Update node context
+  const updateNodeContext = (nodeId: string, context: string) => {
+    // Store the context (you can process it here - send to backend, etc.)
+    console.log(`Node ${nodeId} context:`, context);
+    
+    // Add to submitted contexts array and clear input field
+    setNodes((prevNodes) => addSubmittedContextRecursive(prevNodes, nodeId, context));
+  };
+
+  const addSubmittedContextRecursive = (nodesList: Node[], targetId: string, context: string): Node[] => {
+    return nodesList.map((node) => {
+      if (node.id === targetId) {
+        const existingContexts = node.submittedContexts || [];
+        return { 
+          ...node, 
+          submittedContexts: [...existingContexts, context],
+          context: '' // Clear input field
+        };
+      }
+      if (node.children) {
+        return { ...node, children: addSubmittedContextRecursive(node.children, targetId, context) };
+      }
+      return node;
+    });
+  };
+
+  const updateNodeContextRecursive = (nodesList: Node[], targetId: string, context: string): Node[] => {
+    return nodesList.map((node) => {
+      if (node.id === targetId) {
+        return { ...node, context };
+      }
+      if (node.children) {
+        return { ...node, children: updateNodeContextRecursive(node.children, targetId, context) };
+      }
+      return node;
+    });
+  };
 
   // Convert our tree structure to React Flow nodes and edges
   const flowData = createMemo(() => {
     const flowNodes: FlowNode[] = [];
     const flowEdges: Edge[] = [];
+    
+    // Add master node at the top
+    flowNodes.push({
+      id: 'master',
+      type: 'masterNode',
+      position: { x: -170, y: -200 },
+      data: {
+        onSubmit: handleMasterSubmit,
+      },
+    });
     
     // Calculate positions for nodes in a tree layout
     const levelWidth = 350; // horizontal spacing
@@ -79,7 +179,7 @@ const App: Component = () => {
     
     const traverseTree = (nodeList: Node[], level: number = 0, parentX: number = 0, indexAtLevel: number = 0) => {
       nodeList.forEach((node, index) => {
-        const shouldShow = level === 0 || (node.parentId && isParentSelected(nodes(), node.parentId));
+        const shouldShow = level === 0 || (node.parentId && isParentExpanded(nodes(), node.parentId));
         
         if (!shouldShow) return;
         
@@ -99,6 +199,11 @@ const App: Component = () => {
             title: node.title,
             status: node.status,
             isSelected: node.isSelected,
+            isRoot: !node.parentId,
+            context: node.context,
+            submittedContexts: node.submittedContexts,
+            onContextSubmit: (context: string) => updateNodeContext(node.id, context),
+            onDelete: () => deleteNode(node.id),
           },
         });
         
@@ -123,8 +228,8 @@ const App: Component = () => {
           });
         }
         
-        // Traverse children if node is selected
-        if (node.isSelected && node.children) {
+        // Traverse children if node is expanded
+        if (node.isExpanded && node.children) {
           traverseTree(node.children, level + 1, x, index);
         }
       });
@@ -132,8 +237,41 @@ const App: Component = () => {
     
     traverseTree(nodes());
     
+    // Add edges from master node to all root nodes
+    nodes().forEach((node) => {
+      flowEdges.push({
+        id: `master-${node.id}`,
+        source: 'master',
+        target: node.id,
+        type: 'smoothstep',
+        animated: false,
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          width: 20,
+          height: 20,
+          color: '#10b981',
+        },
+        style: {
+          strokeWidth: 2,
+          stroke: '#10b981',
+        },
+      });
+    });
+    
     return { nodes: flowNodes, edges: flowEdges };
   });
+
+  const isParentExpanded = (nodeList: Node[], parentId: string): boolean => {
+    for (const node of nodeList) {
+      if (node.id === parentId && node.isExpanded) {
+        return true;
+      }
+      if (node.children && isParentExpanded(node.children, parentId)) {
+        return true;
+      }
+    }
+    return false;
+  };
 
   const isParentSelected = (nodeList: Node[], parentId: string): boolean => {
     for (const node of nodeList) {
@@ -154,32 +292,50 @@ const App: Component = () => {
   const toggleNodeRecursive = (nodesList: Node[], targetId: string): Node[] => {
     return nodesList.map((node) => {
       if (node.id === targetId) {
+        // Toggle this node's selection and expansion
+        const newIsSelected = !node.isSelected;
         return { 
           ...node, 
-          isSelected: !node.isSelected,
+          isSelected: newIsSelected,
+          isExpanded: newIsSelected || node.isExpanded, // Keep expanded if already expanded
           children: node.children ? deselectAllChildren(node.children) : undefined
         };
       } else if (node.children) {
         const hasSelectedChild = hasNodeInTree(node.children, targetId);
         if (hasSelectedChild) {
+          // Keep this node expanded but deselect it if a child is being selected
           return {
             ...node,
+            isSelected: false, // Deselect parent when child is selected
+            isExpanded: true, // Keep expanded to show children
             children: toggleNodeRecursive(node.children, targetId)
           };
         } else {
+          // Target is in a different tree - collapse and deselect
           return { 
             ...node, 
             isSelected: false,
-            children: toggleNodeRecursive(node.children, targetId)
+            isExpanded: false, // Collapse when selecting outside tree
+            children: node.children ? collapseAllChildren(node.children) : undefined
           };
         }
       } else {
+        // Deselect nodes without children
         return { 
           ...node, 
           isSelected: false
         };
       }
     });
+  };
+
+  const collapseAllChildren = (nodesList: Node[]): Node[] => {
+    return nodesList.map((node) => ({
+      ...node,
+      isSelected: false,
+      isExpanded: false,
+      children: node.children ? collapseAllChildren(node.children) : undefined
+    }));
   };
 
   const hasNodeInTree = (nodesList: Node[], targetId: string): boolean => {
