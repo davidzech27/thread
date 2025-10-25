@@ -15,7 +15,7 @@ if not openai.api_key:
 # -------------------------
 # Helper: call LLM (sync)
 # -------------------------
-def call_llm(
+async def queryai(
     prompt: str,
     model: str = "gpt-3.5-turbo",
     temperature: float = 0.3,
@@ -50,3 +50,13 @@ def call_llm(
     except Exception as e:
         # Basic error handling so sub-agents don't crash the whole run
         return f"[LLM error: {e}]"
+
+# Mock other functions:
+async def queryuser(agent_id):
+    '''
+    get user feedback on this agent node, returns empty if user does not give anything
+    '''
+    return ""
+
+
+    
