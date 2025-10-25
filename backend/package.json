@@ -13,5 +13,11 @@
   },
   "peerDependencies": {
     "typescript": "^5"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^2.0.37",
+    "@anthropic-ai/sdk": "^0.67.0",
+    "ai": "^5.0.78",
+    "zod": "^4.1.12"
   }
 }
