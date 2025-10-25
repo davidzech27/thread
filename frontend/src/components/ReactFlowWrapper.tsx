@@ -1,6 +1,6 @@
 import { onMount, onCleanup, createEffect } from 'solid-js';
-import React, { useState, useCallback, useEffect } from 'react';
-import { ReactFlow, Background, Controls, Node as FlowNode, Edge, useNodesState, useEdgesState } from '@xyflow/react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { ReactFlow, Background, Controls, Node as FlowNode, Edge, useNodesState, useEdgesState, useReactFlow, ReactFlowProvider } from '@xyflow/react';
 import { createRoot } from 'react-dom/client';
 import { AgentNode } from './AgentNode';
 import { MasterNode } from './MasterNode';
@@ -17,8 +17,8 @@ const nodeTypes = {
   masterNode: MasterNode,
 };
 
-// Create a React component that properly manages state
-const ReactFlowComponent = ({ 
+// Inner component that has access to useReactFlow
+const ReactFlowInner = ({ 
   initialNodes, 
   initialEdges, 
   onNodeClick 
@@ -29,11 +29,26 @@ const ReactFlowComponent = ({
 }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  const { fitView } = useReactFlow();
+  const prevNodeCount = useRef(initialNodes.length);
 
   // Update nodes and edges when props change
   useEffect(() => {
     setNodes(initialNodes);
-  }, [initialNodes, setNodes]);
+    
+    // Check if nodes count changed (expansion or contraction)
+    if (initialNodes.length !== prevNodeCount.current) {
+      // Fit view with animation when nodes appear or disappear
+      setTimeout(() => {
+        fitView({ 
+          duration: 800, // 800ms animation
+          padding: 0.2, // 20% padding around nodes
+        });
+      }, 50); // Small delay to ensure nodes are rendered
+    }
+    
+    prevNodeCount.current = initialNodes.length;
+  }, [initialNodes, setNodes, fitView]);
 
   useEffect(() => {
     setEdges(initialEdges);
@@ -54,9 +69,32 @@ const ReactFlowComponent = ({
       nodesConnectable: false,
       elementsSelectable: false,
       zoomOnDoubleClick: false,
+      minZoom: 0.1,
+      maxZoom: 2,
     },
     React.createElement(Background),
     React.createElement(Controls)
+  );
+};
+
+// Create a React component that properly manages state
+const ReactFlowComponent = ({ 
+  initialNodes, 
+  initialEdges, 
+  onNodeClick 
+}: { 
+  initialNodes: FlowNode[], 
+  initialEdges: Edge[], 
+  onNodeClick?: (event: any, node: FlowNode) => void 
+}) => {
+  return React.createElement(
+    ReactFlowProvider,
+    null,
+    React.createElement(ReactFlowInner, {
+      initialNodes,
+      initialEdges,
+      onNodeClick,
+    })
   );
 };
 

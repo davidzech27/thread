@@ -297,7 +297,7 @@ const App: Component = () => {
         return { 
           ...node, 
           isSelected: newIsSelected,
-          isExpanded: newIsSelected || node.isExpanded, // Keep expanded if already expanded
+          isExpanded: newIsSelected, // Collapse if deselected, expand if selected
           children: node.children ? deselectAllChildren(node.children) : undefined
         };
       } else if (node.children) {
