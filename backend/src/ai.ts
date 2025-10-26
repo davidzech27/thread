@@ -128,10 +128,31 @@ export async function userIntervention(
 // AI DECISION HELPERS
 // ============================================================================
 
-async function decideNeedsClarification(content: string): Promise<boolean> {
-  // Simple heuristic: check for ambiguous language
-  const ambiguousMarkers = ["?", "unclear", "not sure", "maybe", "possibly"];
-  return ambiguousMarkers.some(marker => content.toLowerCase().includes(marker));
+async function decideNeedsClarification(content: string): Promise<string | null> {
+  const result = await streamText({
+    model: anthropic(AI_MODEL),
+    messages: [
+      {
+        role: "user",
+        content: `Before proceeding with: "${content}"
+
+Do you need to ask the user a question that must be answered before you can continue? 
+Only do this when the question is critical and very necessary in order to proceed and solve the entire problem.
+You should only ask the user this question if it is an CLARIFICATION.
+Your response must be exact as it's parsed by a program.
+If yes, respond with exactly the question.
+If no, respond with: NO`,
+      },
+    ],
+  });
+
+  let response = "";
+  for await (const chunk of result.textStream) {
+    response += chunk;
+  }
+
+  response = response.trim();
+  return response === "YES";
 }
 
 async function decideSyncedQuestion(content: string, messages: CoreMessage[]): Promise<string | null> {
@@ -143,9 +164,9 @@ async function decideSyncedQuestion(content: string, messages: CoreMessage[]): P
       {
         role: "user",
         content: `Before proceeding with: "${content}"
-Only do this when the question is blocking and very necessary in order to proceed and solve the entire problem.
-Do you need to ask the user a BLOCKING question that must be answered before you can continue? 
-If the user's response won't change your answer significantly, don't ask.
+
+Do you need to ask a BLOCKING question that must be answered before you can continue? 
+Only do this when the question is very necessary in order to proceed and solve the entire problem.
 Your response must be exact as it's parsed by a program.
 If yes, respond with ONLY the question text.
 If no, respond with: NO_QUESTION`,
@@ -173,6 +194,7 @@ async function generateAsyncSubquestions(content: string, messages: CoreMessage[
 
 Generate 0-4 independent subquestions that could be explored in parallel to help answer this request if it requires so
 Do not generate any subquestion if there is a clear answer to the question and no further exploration is needed
+Only ask question that help you reach an answer to this question
 Each subquestion should be on its own line.
 If no subquestions needed, respond with: NONE
 Your answer must be exact, as it's parsed by a program`,
@@ -227,7 +249,7 @@ Indicate 'yes' if there are contradictions, critical uncertainties, or gaps that
     response += chunk;
   }
 
-  const needsMoreInfo = response.toLowerCase().includes("needs_more_info: yes");
+  const needsMoreInfo = response.toLowerCase().includes("NEEDS_MORE_INFO: yes");
   return { summary: response, needsMoreInfo };
 }
 
@@ -240,6 +262,7 @@ async function* agent(input: {
   messages?: CoreMessage[];
   agentId?: string;
   parentId?: string | null;
+  masterPrompt?: string | null;
 }): AsyncGenerator<any, string, undefined> {
   // Initialize agent state
   const agentId = input.agentId || randomUUID();
@@ -264,6 +287,36 @@ async function* agent(input: {
   };
 
   AGENT_TREE.set(agentId, state);
+  // Check if prompt is related to masterPrompt
+  if (input.masterPrompt && input.prompt) {
+    const relevanceCheck = await streamText({
+      model: anthropic(AI_MODEL),
+      messages: [
+        {
+          role: "user",
+          content: `Master prompt: "${input.masterPrompt}"
+  Current prompt: "${input.prompt}"
+
+  Is the current prompt even remotely related to the master prompt?
+  Answer with ONLY 'RELATED' or 'UNRELATED'.
+  Your response must be exact as it's parsed by a program.`,
+        },
+      ],
+    });
+
+    let relevanceResponse = "";
+    for await (const chunk of relevanceCheck.textStream) {
+      relevanceResponse += chunk;
+    }
+
+    if (relevanceResponse.trim() === "UNRELATED") {
+      state.status = "deleted";
+      state.result = "Agent deleted: prompt unrelated to master prompt";
+      yield { type: "agent-state", agentId, state: { ...state, messages: undefined } };
+      AGENT_TREE.delete(agentId);
+      return state.result;
+    }
+  }
 
   try {
     // Yield initial state
@@ -275,27 +328,34 @@ async function* agent(input: {
 
     // STEP 1: Check if clarification needed
     if (input.prompt && await decideNeedsClarification(input.prompt)) {
-      const clarification = await queryUser(agentId, `Please clarify: ${input.prompt}`);
+      const userquestion = await decideNeedsClarification(input.prompt)
+      if (userquestion) {
+        const clarification = await queryUser(agentId, `Please clarify: ${userquestion}`);
       
-      if (!clarification) {
-        state.status = "completed";
-        state.result = "User did not provide clarification";
+        if (clarification) {
+          state.userContent = clarification;
+          state.messages.push({
+            role: "user",
+            content: clarification,
+          });
+        }
+
+
+        
+      } else if (input.prompt) {
+        state.messages.push({
+          role: "user",
+          content: input.prompt,
+        });
+      }
+    }
+    if (state.userComment === "delete") {
+        state.status = "deleted";
+        state.result = "Agent deleted by user";
         yield { type: "agent-state", agentId, state: { ...state, messages: undefined } };
+        AGENT_TREE.delete(agentId);
         return state.result;
       }
-
-      state.userContent = clarification;
-      state.messages.push({
-        role: "user",
-        content: clarification,
-      });
-    } else if (input.prompt) {
-      state.messages.push({
-        role: "user",
-        content: input.prompt,
-      });
-    }
-
     // STEP 2: Handle synced (blocking) questions
     let maxSyncedQuestions = 3;
     while (maxSyncedQuestions > 0) {
@@ -305,25 +365,27 @@ async function* agent(input: {
 
       const syncAnswer = await queryUser(agentId, syncQuestion);
       
-      if (!syncAnswer) {
-        state.status = "completed";
-        state.result = "User did not answer required question";
-        yield { type: "agent-state", agentId, state: { ...state, messages: undefined } };
-        return state.result;
+      if (syncAnswer) {
+        state.userContent += `\n[User answered: ${syncAnswer}]`;
+        state.messages.push({
+          role: "user",
+          content: syncAnswer,
+        });
       }
 
-      state.userContent += `\n[User answered: ${syncAnswer}]`;
-      state.messages.push({
-        role: "user",
-        content: syncAnswer,
-      });
+      
 
       maxSyncedQuestions--;
     }
-
     // STEP 3: Generate async subquestions
     const subquestions = await generateAsyncSubquestions(state.userContent, state.messages);
-
+    if (state.userComment === "delete") {
+        state.status = "deleted";
+        state.result = "Agent deleted by user";
+        yield { type: "agent-state", agentId, state: { ...state, messages: undefined } };
+        AGENT_TREE.delete(agentId);
+        return state.result;
+      }
     // STEP 4: Spawn subagents
     const subagentGenerators: AsyncGenerator<any, string, undefined>[] = [];
     const subagentIds: string[] = [];
@@ -340,6 +402,13 @@ async function* agent(input: {
       });
 
       subagentGenerators.push(stream);
+    }
+    // Add initial prompt to messages if provided
+    if (input.prompt) {
+      state.messages.push({
+        role: "user",
+        content: input.prompt,
+      });
     }
 
     // Run main agent with Python tool
@@ -521,6 +590,7 @@ async function* runMainAgent(state: AgentState): AsyncGenerator<any, void, undef
       return output;
     }
   }
+
 
   const result = streamText({
     model: anthropic(AI_MODEL),
