@@ -83,6 +83,15 @@ export const MasterNode = memo(({ data }: { data: MasterNodeData }) => {
 					e.currentTarget.style.borderColor = "#d1d5db";
 				},
 			},
+			React.createElement("img", {
+				src: "/favicon.ico",
+				alt: "Thread Logo",
+				style: {
+					width: "30px",
+					height: "30px",
+					marginRight: "12px",
+				},
+			}),
 			React.createElement("input", {
 				ref: inputRef,
 				type: "text",
