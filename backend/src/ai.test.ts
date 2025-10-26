@@ -9,6 +9,7 @@
  * - Agent tree monitoring
  * - Fork/wait system
  * - Error handling
+ * I want to plant tomato in my backyard, give me a cost analysis as of how much that costs. I have the seed, fertilizer.
  */
 
 import {

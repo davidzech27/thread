@@ -139,7 +139,7 @@ async function decideNeedsClarification(content: string): Promise<string | null>
 
 Do you need to ask the user a question that must be answered before you can continue? 
 Only do this when the question is critical and very necessary in order to proceed and solve the entire problem.
-You should only ask the user this question if it is an CLARIFICATION.
+You should only ask the user this question if it is an CLARIFICATION. Do not repeat yourself.
 Your response must be exact as it's parsed by a program.
 If yes, respond with exactly the question.
 If no, respond with: NO`,
@@ -170,7 +170,7 @@ async function decideSyncedQuestion(content: string, messages: CoreMessage[]): P
         content: `Before proceeding with: "${content}"
 
 Do you need to ask a BLOCKING question that must be answered before you can continue? 
-Only do this when the question is very necessary in order to proceed and solve the entire problem.
+Only do this when the question may significantly change how you understand the question and must be answered prior to solving the problem
 Your response must be exact as it's parsed by a program.
 If yes, respond with ONLY the question text.
 If no, respond with: NO_QUESTION`,
@@ -197,8 +197,8 @@ async function generateAsyncSubquestions(content: string, messages: CoreMessage[
         content: `For the request: "${content}"
 
 Generate 0-4 independent subquestions that could be explored in parallel to help answer this request if it requires so
-Do not generate any subquestion if there is a clear answer to the question and no further exploration is needed
 Only ask question that help you reach an answer to this question
+Each subquestion must be 
 Each subquestion should be on its own line.
 If no subquestions needed, respond with: NONE
 Your answer must be exact, as it's parsed by a program`,
@@ -240,10 +240,9 @@ async function summarizeWithAI(
 Subagent results:
 ${subResultsText}
 
-Provide a comprehensive summary. At the end, add a line:
-NEEDS_MORE_INFO: yes/no
+Provide a comprehensive summary. At the end, add a line for whether the summary captures the answer:
 Must be exact, it will be parsed by a program.
-Indicate 'yes' if there are contradictions, critical uncertainties, or gaps that require many user input.`,
+Indicate 'NEEDS_MORE_INFO' on the last line if there are contradictions, critical uncertainties, or gaps that require many user input.`,
       },
     ],
   });
@@ -253,7 +252,8 @@ Indicate 'yes' if there are contradictions, critical uncertainties, or gaps that
     response += chunk;
   }
 
-  const needsMoreInfo = response.toLowerCase().includes("NEEDS_MORE_INFO: yes");
+  const needsMoreInfo = response.toLowerCase().includes("NEEDS_MORE_INFO");
+  
   return { summary: response, needsMoreInfo };
 }
 
@@ -346,89 +346,70 @@ async function* agent(input: {
       state: { ...state, messages: undefined },
     };
 
-    // STEP 1: Check if clarification needed
-    if (input.prompt && await decideNeedsClarification(input.prompt)) {
-      const userquestion = await decideNeedsClarification(input.prompt)
-      if (userquestion) {
-        const clarification = await queryUser(agentId, `Please clarify: ${userquestion}`);
+    
+    // Insufficient info loop:
+    let sufficiencyloopcount = 3;
+    let summary = "";
+    let subResults: Array<{ agentId: string; result: string | null; status: AgentStatus }> = [];
+    
+    while (sufficiencyloopcount > 0) {
+
+      // STEP 1: Check if clarification needed
+      if (input.prompt && await decideNeedsClarification(input.prompt)) {
+        const userquestion = await decideNeedsClarification(input.prompt)
+        if (userquestion) {
+          const clarification = await queryUser(agentId, `Please clarify: ${userquestion}`);
       
-        if (clarification) {
-          state.userContent = clarification;
-          state.messages.push({
-            role: "user",
-            content: clarification,
-          });
-        }
+          if (clarification) {
+            state.userContent = clarification;
+            state.messages.push({
+              role: "user",
+              content: clarification,
+            });
+          }
 
 
         
-      } else if (input.prompt) {
-        state.messages.push({
-          role: "user",
-          content: input.prompt,
-        });
+        } else if (input.prompt) {
+          state.messages.push({
+            role: "user",
+            content: input.prompt,
+          });
+        }
       }
-    }
-    if (state.userComment === "delete") {
+      if (state.userComment === "delete") {
         state.status = "deleted";
         state.result = "Agent deleted by user";
         yield { type: "agent-state", agentId, state: { ...state, messages: undefined } };
         AGENT_TREE.delete(agentId);
         return state.result;
       }
-    // STEP 2: Handle synced (blocking) questions
-    let maxSyncedQuestions = 3;
-    while (maxSyncedQuestions > 0) {
-      const syncQuestion = await decideSyncedQuestion(state.userContent, state.messages);
-      
-      if (!syncQuestion) break;
+      // STEP 2: Handle synced (blocking) questions
+      let maxSyncedQuestions = 3;
+      while (maxSyncedQuestions > 0) {
+        const syncQuestion = await decideSyncedQuestion(state.userContent, state.messages);
+        
+        if (!syncQuestion) {
+           break;
+        }
 
-      const syncAnswer = await queryUser(agentId, syncQuestion);
+        const syncAnswer = await queryUser(agentId, syncQuestion);
       
-      if (syncAnswer) {
-        state.userContent += `\n[User answered: ${syncAnswer}]`;
-        state.messages.push({
-          role: "user",
-          content: syncAnswer,
-        });
+        if (syncAnswer) {
+          state.userContent += `\n[User answered: ${syncAnswer}]`;
+          state.messages.push({
+            role: "user",
+            content: syncAnswer,
+          });
+        }
+
+      
+
+        maxSyncedQuestions--;
       }
 
-      
-
-      maxSyncedQuestions--;
-    }
-
-    // STEP 3: Generate async subquestions
-    const subquestions = await generateAsyncSubquestions(state.userContent, state.messages);
-    if (state.userComment === "delete") {
-        state.status = "deleted";
-        state.result = "Agent deleted by user";
-        yield { type: "agent-state", agentId, state: { ...state, messages: undefined } };
-        AGENT_TREE.delete(agentId);
-        return state.result;
-      }
-
-    // Track whether we've spawned subagents yet
-    let subagentsSpawned = false;
-    let hasUsedBrowserTools = false;
-    const subagentGenerators: AsyncGenerator<any, string, undefined>[] = [];
-    const subagentIds: string[] = [];
-
-    // Add initial prompt to messages if provided
-    if (input.prompt) {
-      state.messages.push({
-        role: "user",
-        content: input.prompt,
-      });
-    }
-
-    // Run main agent with Python tool
-    const mainAgentGenerator = runMainAgent(state);
-    
-    // Interleave main agent and subagent chunks
-
-    for await (const chunk of mainAgentGenerator) {
-      // STEP 4: Check for user intervention
+      // STEP 3: Generate async subquestions
+      const subquestions = await generateAsyncSubquestions(state.userContent, state.messages);
       if (state.userComment === "delete") {
         state.status = "deleted";
         state.result = "Agent deleted by user";
@@ -437,129 +418,144 @@ async function* agent(input: {
         return state.result;
       }
 
-      if (state.userComment === "modify") {
-        // User has modified the content, restart with new content
-        yield { type: "agent-state", agentId, state: { ...state, messages: undefined } };
-        continue;
-      }
+      // Track whether we've spawned subagents yet
+      let subagentsSpawned = false;
+      let hasUsedBrowserTools = false;
+      const subagentGenerators: AsyncGenerator<any, string, undefined>[] = [];
+      const subagentIds: string[] = [];
 
-      yield chunk;
-
-      // Detect browser tool usage (Phase 2 trigger)
-      if (!hasUsedBrowserTools && typeof chunk === 'object' && chunk.type === 'tool-result') {
-        const toolName = chunk.toolName;
-        if (toolName?.startsWith('browser_')) {
-          hasUsedBrowserTools = true;
-          console.log(`\n[Agent ${agentId.substring(0, 8)}] Browser tool detected: ${toolName}`);
-        }
-      }
-
-      // STEP 5: Phase 2 - Once browser context is gathered, spawn subagents with enriched context
-      if (hasUsedBrowserTools && !subagentsSpawned) {
-        subagentsSpawned = true;
-
-        console.log(`\n[Agent ${agentId.substring(0, 8)}] Phase 2: Browser context gathered, generating subquestions`);
-
-        // Generate subquestions based on enriched message history (now includes browser results)
-        const subquestions = await generateAsyncSubquestions(state.userContent, state.messages);
-
-        console.log(`[Agent ${agentId.substring(0, 8)}] Generated ${subquestions.length} subquestions with enriched context`);
-        subquestions.forEach((sq, idx) => {
-          console.log(`  Subquestion ${idx + 1}: ${sq.substring(0, 100)}${sq.length > 100 ? '...' : ''}`);
+      // Add initial prompt to messages if provided
+      if (input.prompt) {
+        state.messages.push({
+          role: "user",
+          content: input.prompt,
         });
+      }
 
-        // Spawn subagents with enriched context
-        for (const subq of subquestions) {
-          const subagentId = randomUUID();
-          state.subagents.push(subagentId);
-          subagentIds.push(subagentId);
+      // Run main agent with Python tool
+      const mainAgentGenerator = runMainAgent(state);
+    
+      // Interleave main agent and subagent chunks
 
-          // Pass parent's ENRICHED message history (including browser results)
-          const subagentMessages: CoreMessage[] = [
-            ...state.messages,
-            {
-              role: "user",
-              content: subq,
-            },
-          ];
+      for await (const chunk of mainAgentGenerator) {
+        // STEP 4: Check for user intervention
+        if (state.userComment === "delete") {
+          state.status = "deleted";
+          state.result = "Agent deleted by user";
+          yield { type: "agent-state", agentId, state: { ...state, messages: undefined } };
+          AGENT_TREE.delete(agentId);
+          return state.result;
+        }
 
-          console.log(`\n[Agent ${agentId.substring(0, 8)}] Spawning subagent ${subagentId.substring(0, 8)} with enriched context`);
-          console.log(`  Passing ${subagentMessages.length} messages (includes browser results)`);
+        if (state.userComment === "modify") {
+          // User has modified the content, restart with new content
+          yield { type: "agent-state", agentId, state: { ...state, messages: undefined } };
+          continue;
+        }
 
-          const stream = agent({
-            messages: subagentMessages,
-            agentId: subagentId,
-            parentId: agentId,
+        yield chunk;
+
+        // Detect browser tool usage (Phase 2 trigger)
+        if (!hasUsedBrowserTools && typeof chunk === 'object' && chunk.type === 'tool-result') {
+          const toolName = chunk.toolName;
+          if (toolName?.startsWith('browser_')) {
+            hasUsedBrowserTools = true;
+            console.log(`\n[Agent ${agentId.substring(0, 8)}] Browser tool detected: ${toolName}`);
+          }
+        }
+
+        // STEP 5: Phase 2 - Once browser context is gathered, spawn subagents with enriched context
+        if (!subagentsSpawned) {
+          subagentsSpawned = true;
+
+          console.log(`\n[Agent ${agentId.substring(0, 8)}] Phase 2: Browser context gathered, generating subquestions`);
+
+          // Generate subquestions based on enriched message history (now includes browser results)
+          const subquestions = await generateAsyncSubquestions(state.userContent, state.messages);
+
+          console.log(`[Agent ${agentId.substring(0, 8)}] Generated ${subquestions.length} subquestions with enriched context`);
+          subquestions.forEach((sq, idx) => {
+            console.log(`  Subquestion ${idx + 1}: ${sq.substring(0, 100)}${sq.length > 100 ? '...' : ''}`);
           });
 
-          subagentGenerators.push(stream);
-        }
-      }
-    }
+          // Spawn subagents with enriched context
+          for (const subq of subquestions) {
+            const subagentId = randomUUID();
+            state.subagents.push(subagentId);
+            subagentIds.push(subagentId);
 
-    // Process subagent streams (if any were spawned)
-    if (subagentGenerators.length > 0) {
-      console.log(`\n[Agent ${agentId.substring(0, 8)}] Processing ${subagentGenerators.length} subagent streams`);
-      for (const subgen of subagentGenerators) {
-        for await (const chunk of subgen) {
-          yield chunk;
-        }
-      }
-    } else {
-      console.log(`\n[Agent ${agentId.substring(0, 8)}] No subagents spawned (no browser tools used)`);
-    }
+            // Pass parent's ENRICHED message history (including browser results)
+            const subagentMessages: CoreMessage[] = [
+              ...state.messages,
+              {
+                role: "user",
+                content: subq,
+              },
+            ];
 
-    // STEP 6: Collect and summarize results
-    console.log(`\n[Agent ${agentId.substring(0, 8)}] Collecting results from ${subagentIds.length} subagents`);
+            console.log(`\n[Agent ${agentId.substring(0, 8)}] Spawning subagent ${subagentId.substring(0, 8)} with enriched context`);
+            console.log(`  Passing ${subagentMessages.length} messages (includes browser results)`);
 
-    const subResults = subagentIds.map(id => {
-      const subState = AGENT_TREE.get(id);
-      const result = subState?.result || null;
-      const status = subState?.status || "completed" as AgentStatus;
+            const stream = agent({
+              messages: subagentMessages,
+              agentId: subagentId,
+              parentId: agentId,
+            });
 
-      console.log(`  Subagent ${id.substring(0, 8)}: ${status}`);
-      if (result) {
-        console.log(`    Result: ${result.substring(0, 100)}${result.length > 100 ? '...' : ''}`);
-      }
-
-      return {
-        agentId: id,
-        result,
-        status,
-      };
-    });
-
-    const mainAnswer = state.result || "";
-    console.log(`\n[Agent ${agentId.substring(0, 8)}] Main answer: ${mainAnswer.substring(0, 150)}${mainAnswer.length > 150 ? '...' : ''}`);
-    console.log(`[Agent ${agentId.substring(0, 8)}] Generating summary...`);
-
-    const { summary, needsMoreInfo } = await summarizeWithAI(mainAnswer, subResults);
-
-    console.log(`[Agent ${agentId.substring(0, 8)}] Summary: ${summary.substring(0, 150)}${summary.length > 150 ? '...' : ''}`);
-    console.log(`[Agent ${agentId.substring(0, 8)}] Needs more info: ${needsMoreInfo}`);
-
-    if (needsMoreInfo) {
-      const finalQuestion = await decideSyncedQuestion(summary, state.messages);
-      
-      if (finalQuestion) {
-        const finalAnswer = await queryUser(agentId, finalQuestion);
-        
-        if (finalAnswer) {
-          state.userContent += `\n[Final user input: ${finalAnswer}]`;
-          state.messages.push({
-            role: "user",
-            content: finalAnswer,
-          });
-          
-          // Get final answer from AI
-          const finalStream = runMainAgent(state);
-          for await (const chunk of finalStream) {
-            yield chunk;
+            subagentGenerators.push(stream);
           }
         }
       }
-    }
 
+      // Process subagent streams (if any were spawned)
+      if (subagentGenerators.length > 0) {
+        console.log(`\n[Agent ${agentId.substring(0, 8)}] Processing ${subagentGenerators.length} subagent streams`);
+        for (const subgen of subagentGenerators) {
+          for await (const chunk of subgen) {
+            yield chunk;
+          }
+        }
+      } else {
+        console.log(`\n[Agent ${agentId.substring(0, 8)}] No subagents spawned (no browser tools used)`);
+      }
+
+      // STEP 6: Collect and summarize results
+      console.log(`\n[Agent ${agentId.substring(0, 8)}] Collecting results from ${subagentIds.length} subagents`);
+
+      const subResults = subagentIds.map(id => {
+        const subState = AGENT_TREE.get(id);
+        const result = subState?.result || null;
+        const status = subState?.status || "completed" as AgentStatus;
+
+        console.log(`  Subagent ${id.substring(0, 8)}: ${status}`);
+        if (result) {
+          console.log(`    Result: ${result.substring(0, 100)}${result.length > 100 ? '...' : ''}`);
+        }
+
+        return {
+          agentId: id,
+          result,
+          status,
+        };
+      });
+
+      const mainAnswer = state.result || "";
+      console.log(`\n[Agent ${agentId.substring(0, 8)}] Main answer: ${mainAnswer.substring(0, 150)}${mainAnswer.length > 150 ? '...' : ''}`);
+      console.log(`[Agent ${agentId.substring(0, 8)}] Generating summary...`);
+
+      const { summary, needsMoreInfo } = await summarizeWithAI(mainAnswer, subResults);
+
+      console.log(`[Agent ${agentId.substring(0, 8)}] Summary: ${summary.substring(0, 150)}${summary.length > 150 ? '...' : ''}`);
+      console.log(`[Agent ${agentId.substring(0, 8)}] Needs more info: ${needsMoreInfo}`);
+      if(!needsMoreInfo){
+        sufficiencyloopcount = -1;
+      } else {
+        console.log(`\n[Agent ${agentId.substring(0, 8)}] Insufficient information detected, looping...`);
+        console.log(`  Query: ${state.userContent.substring(0, 150)}${state.userContent.length > 150 ? '...' : ''}`);
+        console.log(`  Remaining loops: ${sufficiencyloopcount - 1}`);
+        sufficiencyloopcount--;
+      }
+    }
     // Capture final screenshot before completing (so modal doesn't show black screen)
     console.log(`\n[Agent ${agentId.substring(0, 8)}] Capturing final browser screenshot...`);
     await browser.captureFinalScreenshot();
@@ -572,7 +568,7 @@ async function* agent(input: {
     console.log(`[Agent Completed]`);
     console.log(`  Agent ID: ${agentId.substring(0, 8)}`);
     console.log(`  Parent ID: ${parentId ? parentId.substring(0, 8) : 'none (root)'}`);
-    console.log(`  Final Result: ${state.result.substring(0, 200)}${state.result.length > 200 ? '...' : ''}`);
+    console.log(`  Final Result: ${(state.result || "").substring(0, 200)}${(state.result || "").length > 200 ? '...' : ''}`);
     console.log(`  Subagents: ${subResults.length}`);
     console.log(`========================================\n`);
 
@@ -719,7 +715,6 @@ WORKFLOW:
 
 Remember: Using browser tools multiple times is expected and encouraged. Don't stop after just one page!`,
     messages: state.messages,
-    maxSteps: 20, // Allow up to 20 tool calls for thorough research
     tools: {
       python: tool({
         description:
