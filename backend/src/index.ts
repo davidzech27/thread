@@ -1,4 +1,41 @@
 import { agent, setQueryUserHandler, getAgentTree, userIntervention } from "./ai";
+import * as browser from "./browser";
+
+// Store active WebSocket connections for broadcasting
+const activeConnections = new Set<any>();
+
+// Initialize browser on startup
+browser.initBrowser().catch(console.error);
+
+// Setup browser frame broadcasting
+browser.setBrowserFrameHandler((sessionId, frameData, metadata) => {
+  // Broadcast frames to all connected clients
+  for (const ws of activeConnections) {
+    try {
+      ws.send(JSON.stringify({
+        type: 'browser-frame',
+        sessionId,
+        data: frameData,
+        metadata,
+      }));
+    } catch (error) {
+      console.error('Error broadcasting frame:', error);
+    }
+  }
+});
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  console.log('\nShutting down...');
+  await browser.closeBrowser();
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  console.log('\nShutting down...');
+  await browser.closeBrowser();
+  process.exit(0);
+});
 
 // WebSocket server
 const server = Bun.serve({
@@ -27,7 +64,10 @@ const server = Bun.serve({
   websocket: {
     open(ws) {
       console.log("Client connected");
-      
+
+      // Track connection for broadcasting
+      activeConnections.add(ws);
+
       // Setup query user handler
       setQueryUserHandler(async (agentId: string, prompt: string) => {
         return new Promise((resolve) => {
@@ -113,7 +153,10 @@ const server = Bun.serve({
 
     close(ws) {
       console.log("Client disconnected");
-      
+
+      // Remove from active connections
+      activeConnections.delete(ws);
+
       // Clean up any pending queries
       const resolvers = (ws as any).queryResolvers;
       if (resolvers) {

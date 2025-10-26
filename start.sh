@@ -2,27 +2,14 @@
 
 # Start script for the Thread AI Agent System
 
-echo "🚀 Starting Thread AI Agent System..."
-echo ""
-
-# Check if we're in the right directory
-if [ ! -d "backend" ] || [ ! -d "frontend" ]; then
-    echo "❌ Error: Please run this script from the root of the thread directory"
-    exit 1
-fi
-
-# Start backend in background
-echo "📡 Starting backend server..."
 cd backend
 bun run dev &
 BACKEND_PID=$!
 cd ..
 
 # Wait for backend to start
-sleep 3
+echo "⏳ Waiting for backend to initialize..."
 
-# Start frontend
-echo "🎨 Starting frontend..."
 cd frontend
 npm run dev
 

@@ -4,6 +4,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import python from "./python";
 import { randomUUID } from "crypto";
+import * as browser from "./browser";
 
 // ============================================================================
 // CONFIGURATION
@@ -152,7 +153,10 @@ If no, respond with: NO`,
   }
 
   response = response.trim();
-  return response === "YES";
+  if (response === "NO") {
+    return null;
+  }
+  return response;
 }
 
 async function decideSyncedQuestion(content: string, messages: CoreMessage[]): Promise<string | null> {
@@ -268,11 +272,27 @@ async function* agent(input: {
   const agentId = input.agentId || randomUUID();
   const parentId = input.parentId || null;
   const initialMessages: CoreMessage[] = input.messages || [];
-  // Log agent id and initial message for debugging
+
+  // Log agent creation with full context
   const firstMessage = initialMessages.length > 0 ? initialMessages[0] : null;
   const initialMessage =
     input.prompt ?? (firstMessage && typeof firstMessage.content === 'string' ? firstMessage.content : "(no initial message)");
-  console.log("[agent] agentId=", agentId, "initialMessage=", initialMessage);
+
+  console.log("\n========================================");
+  console.log("[Agent Created]");
+  console.log("  Agent ID:", agentId.substring(0, 8));
+  console.log("  Parent ID:", parentId ? parentId.substring(0, 8) : "none (root)");
+  console.log("  Initial Message:", initialMessage.substring(0, 100) + (initialMessage.length > 100 ? "..." : ""));
+  console.log("  Message History Length:", initialMessages.length);
+  if (initialMessages.length > 0) {
+    console.log("  Context from parent:");
+    initialMessages.forEach((msg, idx) => {
+      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+      console.log(`    [${idx}] ${msg.role}: ${content.substring(0, 80)}${content.length > 80 ? '...' : ''}`);
+    });
+  }
+  console.log("========================================\n");
+
   const state: AgentState = {
     agentId,
     parentId,
@@ -377,6 +397,7 @@ async function* agent(input: {
 
       maxSyncedQuestions--;
     }
+
     // STEP 3: Generate async subquestions
     const subquestions = await generateAsyncSubquestions(state.userContent, state.messages);
     if (state.userComment === "delete") {
@@ -386,23 +407,13 @@ async function* agent(input: {
         AGENT_TREE.delete(agentId);
         return state.result;
       }
-    // STEP 4: Spawn subagents
+
+    // Track whether we've spawned subagents yet
+    let subagentsSpawned = false;
+    let hasUsedBrowserTools = false;
     const subagentGenerators: AsyncGenerator<any, string, undefined>[] = [];
     const subagentIds: string[] = [];
-    
-    for (const subq of subquestions) {
-      const subagentId = randomUUID();
-      state.subagents.push(subagentId);
-      subagentIds.push(subagentId);
-      
-      const stream = agent({
-        prompt: subq,
-        agentId: subagentId,
-        parentId: agentId,
-      });
 
-      subagentGenerators.push(stream);
-    }
     // Add initial prompt to messages if provided
     if (input.prompt) {
       state.messages.push({
@@ -415,8 +426,9 @@ async function* agent(input: {
     const mainAgentGenerator = runMainAgent(state);
     
     // Interleave main agent and subagent chunks
+
     for await (const chunk of mainAgentGenerator) {
-      // STEP 5: Check for user intervention
+      // STEP 4: Check for user intervention
       if (state.userComment === "delete") {
         state.status = "deleted";
         state.result = "Agent deleted by user";
@@ -432,27 +444,99 @@ async function* agent(input: {
       }
 
       yield chunk;
-    }
-    
-    // Now process subagent streams and forward their chunks
-    for (const subgen of subagentGenerators) {
-      for await (const chunk of subgen) {
-        yield chunk;
+
+      // Detect browser tool usage (Phase 2 trigger)
+      if (!hasUsedBrowserTools && typeof chunk === 'object' && chunk.type === 'tool-result') {
+        const toolName = chunk.toolName;
+        if (toolName?.startsWith('browser_')) {
+          hasUsedBrowserTools = true;
+          console.log(`\n[Agent ${agentId.substring(0, 8)}] Browser tool detected: ${toolName}`);
+        }
+      }
+
+      // STEP 5: Phase 2 - Once browser context is gathered, spawn subagents with enriched context
+      if (hasUsedBrowserTools && !subagentsSpawned) {
+        subagentsSpawned = true;
+
+        console.log(`\n[Agent ${agentId.substring(0, 8)}] Phase 2: Browser context gathered, generating subquestions`);
+
+        // Generate subquestions based on enriched message history (now includes browser results)
+        const subquestions = await generateAsyncSubquestions(state.userContent, state.messages);
+
+        console.log(`[Agent ${agentId.substring(0, 8)}] Generated ${subquestions.length} subquestions with enriched context`);
+        subquestions.forEach((sq, idx) => {
+          console.log(`  Subquestion ${idx + 1}: ${sq.substring(0, 100)}${sq.length > 100 ? '...' : ''}`);
+        });
+
+        // Spawn subagents with enriched context
+        for (const subq of subquestions) {
+          const subagentId = randomUUID();
+          state.subagents.push(subagentId);
+          subagentIds.push(subagentId);
+
+          // Pass parent's ENRICHED message history (including browser results)
+          const subagentMessages: CoreMessage[] = [
+            ...state.messages,
+            {
+              role: "user",
+              content: subq,
+            },
+          ];
+
+          console.log(`\n[Agent ${agentId.substring(0, 8)}] Spawning subagent ${subagentId.substring(0, 8)} with enriched context`);
+          console.log(`  Passing ${subagentMessages.length} messages (includes browser results)`);
+
+          const stream = agent({
+            messages: subagentMessages,
+            agentId: subagentId,
+            parentId: agentId,
+          });
+
+          subagentGenerators.push(stream);
+        }
       }
     }
 
+    // Process subagent streams (if any were spawned)
+    if (subagentGenerators.length > 0) {
+      console.log(`\n[Agent ${agentId.substring(0, 8)}] Processing ${subagentGenerators.length} subagent streams`);
+      for (const subgen of subagentGenerators) {
+        for await (const chunk of subgen) {
+          yield chunk;
+        }
+      }
+    } else {
+      console.log(`\n[Agent ${agentId.substring(0, 8)}] No subagents spawned (no browser tools used)`);
+    }
+
     // STEP 6: Collect and summarize results
+    console.log(`\n[Agent ${agentId.substring(0, 8)}] Collecting results from ${subagentIds.length} subagents`);
+
     const subResults = subagentIds.map(id => {
       const subState = AGENT_TREE.get(id);
+      const result = subState?.result || null;
+      const status = subState?.status || "completed" as AgentStatus;
+
+      console.log(`  Subagent ${id.substring(0, 8)}: ${status}`);
+      if (result) {
+        console.log(`    Result: ${result.substring(0, 100)}${result.length > 100 ? '...' : ''}`);
+      }
+
       return {
         agentId: id,
-        result: subState?.result || null,
-        status: subState?.status || "completed" as AgentStatus,
+        result,
+        status,
       };
     });
-    
+
     const mainAnswer = state.result || "";
+    console.log(`\n[Agent ${agentId.substring(0, 8)}] Main answer: ${mainAnswer.substring(0, 150)}${mainAnswer.length > 150 ? '...' : ''}`);
+    console.log(`[Agent ${agentId.substring(0, 8)}] Generating summary...`);
+
     const { summary, needsMoreInfo } = await summarizeWithAI(mainAnswer, subResults);
+
+    console.log(`[Agent ${agentId.substring(0, 8)}] Summary: ${summary.substring(0, 150)}${summary.length > 150 ? '...' : ''}`);
+    console.log(`[Agent ${agentId.substring(0, 8)}] Needs more info: ${needsMoreInfo}`);
 
     if (needsMoreInfo) {
       const finalQuestion = await decideSyncedQuestion(summary, state.messages);
@@ -480,6 +564,14 @@ async function* agent(input: {
     state.status = "completed";
     state.metadata.subagents = subResults;
 
+    console.log(`\n========================================`);
+    console.log(`[Agent Completed]`);
+    console.log(`  Agent ID: ${agentId.substring(0, 8)}`);
+    console.log(`  Parent ID: ${parentId ? parentId.substring(0, 8) : 'none (root)'}`);
+    console.log(`  Final Result: ${state.result.substring(0, 200)}${state.result.length > 200 ? '...' : ''}`);
+    console.log(`  Subagents: ${subResults.length}`);
+    console.log(`========================================\n`);
+
     yield {
       type: "agent-state",
       agentId,
@@ -490,6 +582,7 @@ async function* agent(input: {
     return state.result || "";
 
   } catch (error: any) {
+    console.log(`\n[Agent ${agentId.substring(0, 8)}] ERROR: ${error.message}`);
     state.status = "error";
     state.result = error.message;
     yield {
@@ -603,8 +696,105 @@ async function* runMainAgent(state: AgentState): AsyncGenerator<any, void, undef
           code: z.string().describe("Python code to execute"),
         }),
         execute: async ({ code }: { code: string }) => {
+          console.log(`\n[Agent ${state.agentId.substring(0, 8)}] Tool: python`);
+          console.log(`  Code: ${code.substring(0, 150)}${code.length > 150 ? '...' : ''}`);
           const output = await executePython(code);
+          console.log(`  Output: ${output.substring(0, 150)}${output.length > 150 ? '...' : ''}`);
           return output;
+        },
+      }),
+      browser_navigate: tool({
+        description:
+          "Navigate the browser to a URL and automatically extract page content. Opens a visual browser window in the interface. Use this for web searches or to view websites. Returns the page title, URL, text content, and clickable links with IDs.",
+        inputSchema: z.object({
+          url: z.string().describe("URL to navigate to (e.g., 'google.com' or 'https://example.com')"),
+        }),
+        execute: async ({ url }: { url: string }) => {
+          console.log(`\n[Agent ${state.agentId.substring(0, 8)}] Tool: browser_navigate`);
+          console.log(`  URL: ${url}`);
+
+          const finalUrl = await browser.navigateToUrl(url);
+          console.log(`  Final URL: ${finalUrl}`);
+
+          // Automatically extract page text and links after navigation
+          const data = await browser.extractPageText();
+          console.log(`  Page Title: ${data.title}`);
+          console.log(`  Text Length: ${data.text.length} chars`);
+          console.log(`  Links Found: ${data.links.length}`);
+
+          const linksList = data.links.slice(0, 20).map(l => `[${l.id}] ${l.text} -> ${l.url}`).join('\n');
+          const hasMore = data.links.length > 20 ? `\n... and ${data.links.length - 20} more links` : '';
+
+          return `Navigated to: ${finalUrl}\n\nTitle: ${data.title}\n\nText (${data.text.length} chars):\n${data.text.substring(0, 2000)}${data.text.length > 2000 ? '...' : ''}\n\nClickable Links (showing first 20):\n${linksList}${hasMore}`;
+        },
+      }),
+      browser_extract_text: tool({
+        description:
+          "Extract all text and links from the current browser page. Returns the page title, URL, full text content, and a list of clickable links with IDs.",
+        inputSchema: z.object({}),
+        execute: async () => {
+          console.log(`\n[Agent ${state.agentId.substring(0, 8)}] Tool: browser_extract_text`);
+          const data = await browser.extractPageText();
+          console.log(`  Page: ${data.title}`);
+          console.log(`  Text Length: ${data.text.length} chars`);
+          console.log(`  Links: ${data.links.length}`);
+          const linksList = data.links.slice(0, 20).map(l => `[${l.id}] ${l.text} -> ${l.url}`).join('\n');
+          const hasMore = data.links.length > 20 ? `\n... and ${data.links.length - 20} more links` : '';
+          return `Title: ${data.title}\nURL: ${data.url}\n\nText (${data.text.length} chars):\n${data.text.substring(0, 2000)}${data.text.length > 2000 ? '...' : ''}\n\nLinks (showing first 20):\n${linksList}${hasMore}`;
+        },
+      }),
+      browser_click_link: tool({
+        description:
+          "Click a link on the current browser page by its ID and automatically extract the new page content. Link IDs are in the format 'link-0', 'link-1', etc. and are provided by browser_navigate or browser_extract_text. Returns the new page title, text content, and clickable links.",
+        inputSchema: z.object({
+          linkId: z.string().describe("Link ID to click (e.g., 'link-5')"),
+        }),
+        execute: async ({ linkId }: { linkId: string }) => {
+          console.log(`\n[Agent ${state.agentId.substring(0, 8)}] Tool: browser_click_link`);
+          console.log(`  Link ID: ${linkId}`);
+
+          await browser.clickElement(linkId);
+
+          // Wait a bit for navigation to complete
+          await new Promise(resolve => setTimeout(resolve, 1000));
+
+          // Automatically extract the new page content
+          const data = await browser.extractPageText();
+          console.log(`  Navigated to: ${data.url}`);
+          console.log(`  Page Title: ${data.title}`);
+          console.log(`  Text Length: ${data.text.length} chars`);
+
+          const linksList = data.links.slice(0, 20).map(l => `[${l.id}] ${l.text} -> ${l.url}`).join('\n');
+          const hasMore = data.links.length > 20 ? `\n... and ${data.links.length - 20} more links` : '';
+
+          return `Clicked ${linkId} and navigated to: ${data.url}\n\nTitle: ${data.title}\n\nText (${data.text.length} chars):\n${data.text.substring(0, 2000)}${data.text.length > 2000 ? '...' : ''}\n\nClickable Links (showing first 20):\n${linksList}${hasMore}`;
+        },
+      }),
+      browser_scroll: tool({
+        description:
+          "Scroll the browser page to a specific position and automatically extract the page content. Useful for viewing content further down the page. Returns the updated page text and links.",
+        inputSchema: z.object({
+          x: z.number().describe("Horizontal scroll position (pixels)"),
+          y: z.number().describe("Vertical scroll position (pixels)"),
+        }),
+        execute: async ({ x, y }: { x: number; y: number }) => {
+          console.log(`\n[Agent ${state.agentId.substring(0, 8)}] Tool: browser_scroll`);
+          console.log(`  Position: (${x}, ${y})`);
+
+          await browser.scrollTo(x, y);
+
+          // Wait a bit for any lazy-loaded content
+          await new Promise(resolve => setTimeout(resolve, 500));
+
+          // Automatically extract the page content after scrolling
+          const data = await browser.extractPageText();
+          console.log(`  Text Length: ${data.text.length} chars`);
+          console.log(`  Links: ${data.links.length}`);
+
+          const linksList = data.links.slice(0, 20).map(l => `[${l.id}] ${l.text} -> ${l.url}`).join('\n');
+          const hasMore = data.links.length > 20 ? `\n... and ${data.links.length - 20} more links` : '';
+
+          return `Scrolled to position (${x}, ${y})\n\nTitle: ${data.title}\n\nText (${data.text.length} chars):\n${data.text.substring(0, 2000)}${data.text.length > 2000 ? '...' : ''}\n\nClickable Links (showing first 20):\n${linksList}${hasMore}`;
         },
       }),
     },
@@ -617,16 +807,23 @@ async function* runMainAgent(state: AgentState): AsyncGenerator<any, void, undef
 
   const stream = result.toUIMessageStream();
 
+  console.log(`\n[Agent ${state.agentId.substring(0, 8)}] Starting text generation...`);
+
   let textResult = "";
   for await (const chunk of stream) {
     if (chunk.type === "text-delta") {
       textResult += chunk.delta;
     }
-    
+
     // Attach agentId to all chunks for routing
     (chunk as any).agentId = state.agentId;
 
     yield chunk;
+  }
+
+  console.log(`[Agent ${state.agentId.substring(0, 8)}] Text generation complete (${textResult.length} chars)`);
+  if (textResult.length > 0) {
+    console.log(`[Agent ${state.agentId.substring(0, 8)}] Generated text: ${textResult.substring(0, 200)}${textResult.length > 200 ? '...' : ''}`);
   }
 
   if (!state.result) {

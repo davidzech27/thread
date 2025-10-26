@@ -20,12 +20,13 @@ const App: Component = () => {
 	const [isConnected, setIsConnected] = createSignal(false);
 	const [modalOpen, setModalOpen] = createSignal(false);
 	const [modalTitle, setModalTitle] = createSignal("");
+	const [browserFrameData, setBrowserFrameData] = createSignal<string | null>(null);
+	const [browserMetadata, setBrowserMetadata] = createSignal<{ width: number; height: number } | null>(null);
 
 	const handleViewClick = (nodeId: string, title: string) => {
 		console.log("View clicked for node:", nodeId, title);
-		setModalTitle(title);
+		setModalTitle(`Browser - ${title}`);
 		setModalOpen(true);
-		console.log("Modal state:", modalOpen());
 	};
 
 	const handleCloseModal = () => {
@@ -63,6 +64,10 @@ const App: Component = () => {
 				// All agents completed
 				console.log("Agent workflow completed");
 				markMasterAsCompleted();
+			} else if (data.type === "browser-frame") {
+				// Browser frame received from backend
+				setBrowserFrameData(data.data);
+				setBrowserMetadata(data.metadata);
 			} else if (data.type === "error") {
 				console.error("Backend error:", data.error);
 			}
@@ -605,6 +610,8 @@ const App: Component = () => {
 					isOpen: modalOpen(),
 					onClose: handleCloseModal,
 					title: modalTitle(),
+					frameData: browserFrameData(),
+					metadata: browserMetadata(),
 				})
 			);
 		}
