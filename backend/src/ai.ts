@@ -560,6 +560,10 @@ async function* agent(input: {
       }
     }
 
+    // Capture final screenshot before completing (so modal doesn't show black screen)
+    console.log(`\n[Agent ${agentId.substring(0, 8)}] Capturing final browser screenshot...`);
+    await browser.captureFinalScreenshot();
+
     state.result = summary;
     state.status = "completed";
     state.metadata.subagents = subResults;
@@ -583,6 +587,12 @@ async function* agent(input: {
 
   } catch (error: any) {
     console.log(`\n[Agent ${agentId.substring(0, 8)}] ERROR: ${error.message}`);
+
+    // Capture final screenshot even on error
+    await browser.captureFinalScreenshot().catch(err => {
+      console.log(`[Agent ${agentId.substring(0, 8)}] Failed to capture error screenshot:`, err.message);
+    });
+
     state.status = "error";
     state.result = error.message;
     yield {
@@ -605,6 +615,9 @@ async function* runMainAgent(state: AgentState): AsyncGenerator<any, void, undef
   // Fork management (nested agents)
   const forks = new Map<number, Promise<string>>();
   let nextHandle = 1;
+
+  // Track browser tool usage for multi-page browsing
+  let browserToolCallCount = 0;
 
   async function executePython(code: string): Promise<string> {
     if (py) {
@@ -687,7 +700,26 @@ async function* runMainAgent(state: AgentState): AsyncGenerator<any, void, undef
 
   const result = streamText({
     model: anthropic(AI_MODEL),
+    system: `You are a research agent with web browsing capabilities. Your goal is to thoroughly research the user's question by exploring multiple web pages.
+
+IMPORTANT BROWSING INSTRUCTIONS:
+- You can and SHOULD use browser tools MULTIPLE times to gather comprehensive information
+- Start by navigating to a search engine or relevant website using browser_navigate
+- Use browser_click_link to follow interesting links and explore multiple pages
+- Visit several different sources to get a complete picture
+- Each time you navigate or click a link, you'll get new page content with new links to explore
+- Continue browsing until you have gathered enough information to answer the question thoroughly
+
+WORKFLOW:
+1. Navigate to a search engine (e.g., google.com) or directly to a relevant site
+2. Click on promising links using their link IDs (e.g., 'link-3', 'link-7')
+3. Extract information from multiple pages
+4. If needed, navigate to new URLs or click more links to explore deeper
+5. Synthesize findings from all the pages you visited
+
+Remember: Using browser tools multiple times is expected and encouraged. Don't stop after just one page!`,
     messages: state.messages,
+    maxSteps: 20, // Allow up to 20 tool calls for thorough research
     tools: {
       python: tool({
         description:
@@ -710,7 +742,8 @@ async function* runMainAgent(state: AgentState): AsyncGenerator<any, void, undef
           url: z.string().describe("URL to navigate to (e.g., 'google.com' or 'https://example.com')"),
         }),
         execute: async ({ url }: { url: string }) => {
-          console.log(`\n[Agent ${state.agentId.substring(0, 8)}] Tool: browser_navigate`);
+          browserToolCallCount++;
+          console.log(`\n[Agent ${state.agentId.substring(0, 8)}] Tool: browser_navigate [Call #${browserToolCallCount}]`);
           console.log(`  URL: ${url}`);
 
           const finalUrl = await browser.navigateToUrl(url);
@@ -751,7 +784,8 @@ async function* runMainAgent(state: AgentState): AsyncGenerator<any, void, undef
           "Extract all text and links from the current browser page. Returns the page title, URL, full text content, and a list of clickable links with IDs.",
         inputSchema: z.object({}),
         execute: async () => {
-          console.log(`\n[Agent ${state.agentId.substring(0, 8)}] Tool: browser_extract_text`);
+          browserToolCallCount++;
+          console.log(`\n[Agent ${state.agentId.substring(0, 8)}] Tool: browser_extract_text [Call #${browserToolCallCount}]`);
           const data = await browser.extractPageText();
           console.log(`  Page: ${data.title}`);
           console.log(`  Text Length: ${data.text.length} chars`);
@@ -787,7 +821,8 @@ async function* runMainAgent(state: AgentState): AsyncGenerator<any, void, undef
           linkId: z.string().describe("Link ID to click (e.g., 'link-5')"),
         }),
         execute: async ({ linkId }: { linkId: string }) => {
-          console.log(`\n[Agent ${state.agentId.substring(0, 8)}] Tool: browser_click_link`);
+          browserToolCallCount++;
+          console.log(`\n[Agent ${state.agentId.substring(0, 8)}] Tool: browser_click_link [Call #${browserToolCallCount}]`);
           console.log(`  Link ID: ${linkId}`);
 
           await browser.clickElement(linkId);
@@ -834,7 +869,8 @@ async function* runMainAgent(state: AgentState): AsyncGenerator<any, void, undef
           y: z.number().describe("Vertical scroll position (pixels)"),
         }),
         execute: async ({ x, y }: { x: number; y: number }) => {
-          console.log(`\n[Agent ${state.agentId.substring(0, 8)}] Tool: browser_scroll`);
+          browserToolCallCount++;
+          console.log(`\n[Agent ${state.agentId.substring(0, 8)}] Tool: browser_scroll [Call #${browserToolCallCount}]`);
           console.log(`  Position: (${x}, ${y})`);
 
           await browser.scrollTo(x, y);
@@ -896,6 +932,7 @@ async function* runMainAgent(state: AgentState): AsyncGenerator<any, void, undef
   }
 
   console.log(`[Agent ${state.agentId.substring(0, 8)}] Text generation complete (${textResult.length} chars)`);
+  console.log(`[Agent ${state.agentId.substring(0, 8)}] Total browser tool calls: ${browserToolCallCount}`);
   if (textResult.length > 0) {
     console.log(`[Agent ${state.agentId.substring(0, 8)}] Generated text: ${textResult.substring(0, 200)}${textResult.length > 200 ? '...' : ''}`);
   }

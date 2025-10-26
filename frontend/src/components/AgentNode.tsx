@@ -125,14 +125,16 @@ export const AgentNode = memo(({ data }: { data: AgentNodeData }) => {
 				minWidth: "256px",
 				maxWidth: "400px",
 				minHeight: "170px",
+				maxHeight: "400px",
 				display: "flex",
 				flexDirection: "column",
 				alignItems: "center",
-				justifyContent: "center",
+				justifyContent: "flex-start",
 				boxShadow: data.isFinalAnswer
 					? "0 8px 16px -2px rgb(16 185 129 / 0.3)"
 					: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
 				cursor: "pointer",
+				overflow: "visible",
 			},
 		},
 		!data.isRoot &&
@@ -290,15 +292,18 @@ export const AgentNode = memo(({ data }: { data: AgentNodeData }) => {
 						padding: "8px",
 						background: "#f9fafb",
 						borderRadius: "6px",
-						maxHeight: "300px",
-						overflowY: "auto",
+						maxHeight: "120px",
+						overflowY: "scroll",  // Force scrollbar to always show
 						overflowX: "hidden",
 						width: "100%",
 						whiteSpace: "pre-wrap",
 						wordWrap: "break-word",
-						scrollbarWidth: "thin",
-						scrollbarColor: "#cbd5e1 #f9fafb",
-					},
+						scrollbarWidth: "auto",  // Use normal width for Firefox
+						scrollbarColor: "#64748b #e2e8f0",  // Darker thumb, lighter track
+						// WebKit scrollbar styling for better visibility
+						WebkitOverflowScrolling: "touch",
+					} as React.CSSProperties,
+					className: "agent-content-scroll",
 				},
 				data.content
 			),

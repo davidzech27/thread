@@ -148,8 +148,8 @@ export const BrowserModal: React.FC<BrowserModalProps> = ({
       // Canvas
       React.createElement('canvas', {
         ref: canvasRef,
-        width: 2880,
-        height: 1800,
+        width: 1440,
+        height: 900,
         style: {
           width: '100%',
           height: 'auto',

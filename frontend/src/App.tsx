@@ -26,6 +26,10 @@ const App: Component = () => {
 	const handleViewClick = (nodeId: string, title: string) => {
 		console.log("View clicked for node:", nodeId, title);
 		setModalTitle(`Browser - ${title}`);
+		// Clear stale frame data when opening modal to show "Waiting for browser..."
+		// This prevents showing a black/stale screen from previous sessions
+		setBrowserFrameData(null);
+		setBrowserMetadata(null);
 		setModalOpen(true);
 	};
 

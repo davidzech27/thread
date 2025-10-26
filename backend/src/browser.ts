@@ -82,8 +82,8 @@ export async function getOrCreateSession(): Promise<BrowserSession> {
   }
 
   const sessionId = 'browser-session';
-  const width = 2880;
-  const height = 1800;
+  const width = 1440;
+  const height = 900;
 
   console.log('[Browser] Creating new session');
 
@@ -264,8 +264,8 @@ export async function navigateToUrl(url: string): Promise<string> {
       // Broadcast the initial frame
       if (frameBroadcastFn) {
         frameBroadcastFn(session.sessionId, base64, {
-          width: 2880,
-          height: 1800,
+          width: 1440,
+          height: 900,
         });
       }
     } catch (screenshotError) {
@@ -378,6 +378,37 @@ export async function getScrollPosition(): Promise<{ x: number; y: number }> {
   }));
 
   return scrollPos;
+}
+
+export async function captureFinalScreenshot(): Promise<void> {
+  if (!currentSession) {
+    console.log('[Browser] No active session, skipping final screenshot');
+    return;
+  }
+
+  console.log('[Browser] Capturing final screenshot before cleanup...');
+
+  try {
+    const screenshot = await currentSession.page.screenshot({
+      type: 'jpeg',
+      quality: 85,
+    });
+    const base64 = screenshot.toString('base64');
+
+    // Broadcast the final screenshot
+    if (frameBroadcastFn) {
+      frameBroadcastFn(currentSession.sessionId, base64, {
+        width: 1440,
+        height: 900,
+      });
+      console.log('[Browser] Final screenshot captured and broadcast');
+    }
+
+    // Wait a bit to ensure the frame is sent
+    await new Promise(resolve => setTimeout(resolve, 200));
+  } catch (error) {
+    console.error('[Browser] Failed to capture final screenshot:', error);
+  }
 }
 
 // ============================================================================
