@@ -722,6 +722,24 @@ async function* runMainAgent(state: AgentState): AsyncGenerator<any, void, undef
           console.log(`  Text Length: ${data.text.length} chars`);
           console.log(`  Links Found: ${data.links.length}`);
 
+          // Log detailed scraped text
+          console.log(`\n  ========== SCRAPED TEXT (first 1000 chars) ==========`);
+          console.log(data.text.substring(0, 1000));
+          if (data.text.length > 1000) {
+            console.log(`  ... (${data.text.length - 1000} more characters)`);
+          }
+          console.log(`  ======================================================\n`);
+
+          // Log detailed links
+          console.log(`  ========== SCRAPED LINKS (first 30) ==========`);
+          data.links.slice(0, 30).forEach((link, idx) => {
+            console.log(`    [${idx}] ${link.id}: "${link.text}" -> ${link.url}`);
+          });
+          if (data.links.length > 30) {
+            console.log(`    ... and ${data.links.length - 30} more links`);
+          }
+          console.log(`  ==============================================\n`);
+
           const linksList = data.links.slice(0, 20).map(l => `[${l.id}] ${l.text} -> ${l.url}`).join('\n');
           const hasMore = data.links.length > 20 ? `\n... and ${data.links.length - 20} more links` : '';
 
@@ -738,6 +756,25 @@ async function* runMainAgent(state: AgentState): AsyncGenerator<any, void, undef
           console.log(`  Page: ${data.title}`);
           console.log(`  Text Length: ${data.text.length} chars`);
           console.log(`  Links: ${data.links.length}`);
+
+          // Log detailed scraped text
+          console.log(`\n  ========== SCRAPED TEXT (first 1000 chars) ==========`);
+          console.log(data.text.substring(0, 1000));
+          if (data.text.length > 1000) {
+            console.log(`  ... (${data.text.length - 1000} more characters)`);
+          }
+          console.log(`  ======================================================\n`);
+
+          // Log detailed links
+          console.log(`  ========== SCRAPED LINKS (first 30) ==========`);
+          data.links.slice(0, 30).forEach((link, idx) => {
+            console.log(`    [${idx}] ${link.id}: "${link.text}" -> ${link.url}`);
+          });
+          if (data.links.length > 30) {
+            console.log(`    ... and ${data.links.length - 30} more links`);
+          }
+          console.log(`  ==============================================\n`);
+
           const linksList = data.links.slice(0, 20).map(l => `[${l.id}] ${l.text} -> ${l.url}`).join('\n');
           const hasMore = data.links.length > 20 ? `\n... and ${data.links.length - 20} more links` : '';
           return `Title: ${data.title}\nURL: ${data.url}\n\nText (${data.text.length} chars):\n${data.text.substring(0, 2000)}${data.text.length > 2000 ? '...' : ''}\n\nLinks (showing first 20):\n${linksList}${hasMore}`;
@@ -763,6 +800,25 @@ async function* runMainAgent(state: AgentState): AsyncGenerator<any, void, undef
           console.log(`  Navigated to: ${data.url}`);
           console.log(`  Page Title: ${data.title}`);
           console.log(`  Text Length: ${data.text.length} chars`);
+          console.log(`  Links Found: ${data.links.length}`);
+
+          // Log detailed scraped text
+          console.log(`\n  ========== SCRAPED TEXT (first 1000 chars) ==========`);
+          console.log(data.text.substring(0, 1000));
+          if (data.text.length > 1000) {
+            console.log(`  ... (${data.text.length - 1000} more characters)`);
+          }
+          console.log(`  ======================================================\n`);
+
+          // Log detailed links
+          console.log(`  ========== SCRAPED LINKS (first 30) ==========`);
+          data.links.slice(0, 30).forEach((link, idx) => {
+            console.log(`    [${idx}] ${link.id}: "${link.text}" -> ${link.url}`);
+          });
+          if (data.links.length > 30) {
+            console.log(`    ... and ${data.links.length - 30} more links`);
+          }
+          console.log(`  ==============================================\n`);
 
           const linksList = data.links.slice(0, 20).map(l => `[${l.id}] ${l.text} -> ${l.url}`).join('\n');
           const hasMore = data.links.length > 20 ? `\n... and ${data.links.length - 20} more links` : '';
@@ -790,6 +846,24 @@ async function* runMainAgent(state: AgentState): AsyncGenerator<any, void, undef
           const data = await browser.extractPageText();
           console.log(`  Text Length: ${data.text.length} chars`);
           console.log(`  Links: ${data.links.length}`);
+
+          // Log detailed scraped text
+          console.log(`\n  ========== SCRAPED TEXT (first 1000 chars) ==========`);
+          console.log(data.text.substring(0, 1000));
+          if (data.text.length > 1000) {
+            console.log(`  ... (${data.text.length - 1000} more characters)`);
+          }
+          console.log(`  ======================================================\n`);
+
+          // Log detailed links
+          console.log(`  ========== SCRAPED LINKS (first 30) ==========`);
+          data.links.slice(0, 30).forEach((link, idx) => {
+            console.log(`    [${idx}] ${link.id}: "${link.text}" -> ${link.url}`);
+          });
+          if (data.links.length > 30) {
+            console.log(`    ... and ${data.links.length - 30} more links`);
+          }
+          console.log(`  ==============================================\n`);
 
           const linksList = data.links.slice(0, 20).map(l => `[${l.id}] ${l.text} -> ${l.url}`).join('\n');
           const hasMore = data.links.length > 20 ? `\n... and ${data.links.length - 20} more links` : '';
