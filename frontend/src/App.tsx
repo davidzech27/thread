@@ -1,5 +1,6 @@
 import {
 	Component,
+	Show,
 	createSignal,
 	createMemo,
 	onMount,
@@ -8,6 +9,9 @@ import {
 } from "solid-js";
 import { ReactFlowWrapper } from "./components/ReactFlowWrapper";
 import { BrowserModal } from "./components/BrowserModal";
+import { GraphView } from "./components/graph/GraphView";
+import { TemporalGraphStore } from "./graph/temporal";
+import { applyServerMessage } from "./graph/live";
 import { Node as FlowNode, Edge, MarkerType } from "@xyflow/react";
 import { Node } from "./types/Node";
 import React from "react";
@@ -15,6 +19,12 @@ import { createRoot } from "react-dom/client";
 
 const App: Component = () => {
 	const [nodes, setNodes] = createSignal<Node[]>([]);
+	const [viewMode, setViewMode] = createSignal<"activity" | "cards">(
+		"activity"
+	);
+	// Records the run as a temporal graph so the activity view can scrub
+	// through history; persists across view toggles.
+	const graphStore = new TemporalGraphStore();
 	const [masterPrompt, setMasterPrompt] = createSignal<string>("");
 	const [ws, setWs] = createSignal<WebSocket | null>(null);
 	const [isConnected, setIsConnected] = createSignal(false);
@@ -50,6 +60,8 @@ const App: Component = () => {
 		websocket.onmessage = (event) => {
 			const data = JSON.parse(event.data);
 			console.log("Received:", data);
+
+			applyServerMessage(graphStore, data);
 
 			if (data.type === "agent-state") {
 				// Update or create agent node
@@ -627,13 +639,52 @@ const App: Component = () => {
 		}
 	});
 
+	const ViewToggle = () => (
+		<div class="fixed top-3.5 right-4 z-50 flex items-center gap-1.5 text-[11px] select-none">
+			{(["activity", "cards"] as const).map((mode, i) => (
+				<>
+					{i > 0 && <span class="text-stone-300">·</span>}
+					<button
+						type="button"
+						class="hover:text-stone-700"
+						classList={{
+							"text-stone-800 font-medium": viewMode() === mode,
+							"text-stone-400": viewMode() !== mode,
+						}}
+						onClick={() => setViewMode(mode)}
+					>
+						{mode}
+					</button>
+				</>
+			))}
+		</div>
+	);
+
 	return (
 		<div class="w-screen h-screen bg-white">
-			<ReactFlowWrapper
-				nodes={flowData().nodes}
-				edges={flowData().edges}
-				onNodeClick={handleNodeClick}
-			/>
+			{/* Cards view mounts only while active so React Flow can
+			    measure its viewport; the activity view stays mounted to
+			    preserve camera, playhead, and selection across toggles. */}
+			<Show when={viewMode() === "cards"}>
+				<div class="absolute inset-0">
+					<ReactFlowWrapper
+						nodes={flowData().nodes}
+						edges={flowData().edges}
+						onNodeClick={handleNodeClick}
+					/>
+				</div>
+			</Show>
+			<div
+				class="absolute inset-0"
+				style={{ display: viewMode() === "activity" ? "block" : "none" }}
+			>
+				<GraphView
+					store={graphStore}
+					live={isConnected}
+					onPrompt={handleMasterSubmit}
+				/>
+			</div>
+			<ViewToggle />
 			<div ref={modalContainer!} />
 		</div>
 	);
